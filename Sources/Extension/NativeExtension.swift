@@ -28,19 +28,23 @@ final class Engine {
         var preview: Bool
         var generation: UUID
         var valid: Bool
+        var configuration: WallpaperConfiguration
+        var presentation: WallpaperPresentation
+        var activity: String
     }
     var surfaces: [UUID: Surface] = [:]
     private var clocks: [String: MotionClock] = [:]
-    private var mode = "default"
-    private var activity = "active"
     private var sleeping = false
     private var lastCheckpoint = CACurrentMediaTime()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
 
-    func clock(for shader: String) -> MotionClock {
-        if let clock = clocks[shader] { return clock }
-        let clock = MotionClock(saved: UserDefaults.standard.double(forKey: "time.\(shader)"))
-        clocks[shader] = clock
+    func clock(for shader: String, role: String = "locked") -> MotionClock {
+        let key = "\(role).\(shader)"
+        if let clock = clocks[key] { return clock }
+        let saved = UserDefaults.standard.object(forKey: "time.\(key)") == nil
+            ? UserDefaults.standard.double(forKey: "time.\(shader)") : UserDefaults.standard.double(forKey: "time.\(key)")
+        let clock = MotionClock(saved: saved)
+        clocks[key] = clock
         return clock
     }
     func checkpoint() {
@@ -68,37 +72,49 @@ final class Engine {
             observers.append((system, token))
         }
     }
-    func update(mode: String, activity: String) {
-        self.mode = mode; self.activity = activity
-        extensionLog("Lifecycle mode=\(mode), activity=\(activity)")
+    func update(id: UUID, mode: String?, activity: String?) {
+        guard var surface = surfaces[id], !surface.preview else { return }
+        if let mode { surface.presentation = WallpaperPresentation(mode: mode) }
+        if let activity { surface.activity = activity }
+        surfaces[id] = surface
+        extensionLog("Surface \(id): presentation=\(surface.presentation), activity=\(surface.activity)")
         applyPolicy()
     }
     func applyPolicy() {
-        let hardPause = sleeping || activity != "active" || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let moving = !hardPause && (mode == "locked" || mode == "idle" || mode == "screenSaver")
-        let visible = Set(surfaces.values.filter { !$0.preview && $0.valid }.map { $0.renderer.entry.id })
-        for (id, clock) in clocks { clock.setMoving(moving && visible.contains(id), immediately: hardPause || !visible.contains(id)) }
-        for surface in surfaces.values {
-            let daylightVisible = !surface.preview && surface.valid && !sleeping && activity == "active"
-            surface.renderer.setDaylightUpdatesEnabled(daylightVisible)
-            guard !surface.preview && surface.valid else { continue }
-            if hardPause {
-                surface.renderer.stop()
-                // Reduce Motion needs a sharp held frame. Sleep and inactive
-                // surfaces defer that work until they become visible again.
-                if daylightVisible { surface.renderer.restoreNativeFrame() }
+        var movingClocks = Set<String>(), visibleClocks = Set<String>()
+        for surface in surfaces.values where !surface.preview && surface.valid {
+            let mode = surface.presentation, config = surface.configuration
+            let entry = ShaderLibrary.entry(config.shader(for: mode)) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)!
+            let key = "\(mode.role).\(entry.id)", clock = self.clock(for: entry.id, role: mode.role)
+            let active = !sleeping && surface.activity == "active"
+            do { try surface.renderer.setAppearance(entry: entry, clock: clock, presentation: mode, configuration: config, redraw: active) }
+            catch { extensionLog("Appearance change failed: \(error.localizedDescription)"); surface.renderer.stop(); continue }
+            visibleClocks.insert(key)
+            if active && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && mode != .unknown && mode != .idle && config.animates(in: mode) {
+                movingClocks.insert(key)
             }
-            else if !surface.renderer.clock.settled { surface.renderer.start() }
-            else { surface.renderer.restoreNativeFrame() }
         }
-        if !moving { checkpoint() }
+        for (key,clock) in clocks { clock.setMoving(movingClocks.contains(key), immediately: !movingClocks.contains(key)) }
+        for surface in surfaces.values where !surface.preview && surface.valid {
+            let active = !sleeping && surface.activity == "active"
+            surface.renderer.setDaylightUpdatesEnabled(active)
+            if !active || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                surface.renderer.stop()
+                if active { surface.renderer.restoreNativeFrame() }
+            } else if !surface.renderer.clock.settled { surface.renderer.start() }
+            else { surface.renderer.stop(); surface.renderer.restoreNativeFrame() }
+        }
+        if movingClocks.isEmpty { checkpoint() }
     }
-    func acquire(id: UUID, name: String, size: CGSize, scale: CGFloat, display: UInt32?, preview: Bool) throws -> AnyObject {
-        let entry = ShaderLibrary.entry(name) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)
+    func acquire(id: UUID, configuration data: Data?, size: CGSize, scale: CGFloat, display: UInt32?, preview: Bool, mode: String? = nil, activity: String? = nil) throws -> AnyObject {
+        let configuration = WallpaperConfiguration.decode(data)
+        let presentation = preview ? WallpaperPresentation.preview : (mode.map(WallpaperPresentation.init(mode:)) ?? surfaces[id]?.presentation ?? .desktop)
+        let entry = ShaderLibrary.entry(configuration.shader(for: presentation)) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)
         guard let entry else { throw failure("No bundled shaders") }
-        if var existing = surfaces[id], existing.renderer.entry.id == entry.id,
+        if var existing = surfaces[id], existing.configuration == configuration,
            existing.root.bounds.size == size, existing.root.contentsScale == scale {
-            existing.generation = UUID(); existing.valid = true; surfaces[id] = existing
+            existing.generation = UUID(); existing.valid = true; existing.presentation = presentation
+            if let activity { existing.activity = activity }; surfaces[id] = existing
             if !preview { applyPolicy() }
             guard let result = createRemoteContextXPC(contextId: existing.context.contextId) else { throw failure("Could not return wallpaper surface") }
             return result
@@ -119,8 +135,9 @@ final class Engine {
         root.frame = CGRect(origin: .zero, size: size); root.contentsScale = scale
         root.isOpaque = true
         if existing == nil { context.layer = root }
-        let clock = preview ? MotionClock(saved: self.clock(for: entry.id).value) : self.clock(for: entry.id)
+        let clock = preview ? MotionClock(saved: self.clock(for: entry.id, role: presentation.role).value) : self.clock(for: entry.id, role: presentation.role)
         let renderer = try ShaderRenderer(entry: entry, clock: clock, root: root, scale: scale)
+        try renderer.setAppearance(entry: entry, clock: clock, presentation: presentation, configuration: configuration)
         existing?.renderer.layer.removeFromSuperlayer()
         renderer.onSettled = { [weak self, weak renderer] in
             self?.checkpoint()
@@ -131,7 +148,7 @@ final class Engine {
             self.checkpoint()
         }
         renderer.onError = { error in extensionLog("Rendering \(entry.id) failed: \(error.localizedDescription)") }
-        surfaces[id] = Surface(context: context, root: root, renderer: renderer, preview: preview, generation: UUID(), valid: true)
+        surfaces[id] = Surface(context: context, root: root, renderer: renderer, preview: preview, generation: UUID(), valid: true, configuration: configuration, presentation: presentation, activity: activity ?? "active")
         if preview { clock.setMoving(false, immediately: true) }
         else { applyPolicy() }
         guard let result = createRemoteContextXPC(contextId: context.contextId) else { throw failure("Could not return wallpaper surface") }
@@ -143,7 +160,7 @@ final class Engine {
         surfaces[id]?.valid = false
         surface.renderer.stop()
         surface.renderer.setDaylightUpdatesEnabled(false)
-        if !surfaces.values.contains(where: { !$0.preview && $0.renderer.isRendering && $0.renderer.entry.id == surface.renderer.entry.id }) {
+        if !surfaces.values.contains(where: { !$0.preview && $0.renderer.isRendering && $0.renderer.clock === surface.renderer.clock }) {
             surface.renderer.clock.setMoving(false, immediately: true)
         }
         checkpoint()

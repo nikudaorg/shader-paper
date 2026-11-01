@@ -38,17 +38,19 @@ final class WallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
                 self.preview = (findProperty("isPreview", in: request) as? Bool) ?? false
                 self.lastID = id
                 let data = findProperty("configuration", in: request) as? Data
-                let name = data.flatMap { String(data: $0, encoding: .utf8) } ?? ShaderLibrary.defaultShader
-                reply(try Engine.shared.acquire(id: id, name: name, size: size, scale: scale, display: display, preview: self.preview), nil)
+                let mode = caseName(findProperty("presentationMode", in: request))
+                let activity = caseName(findProperty("activityState", in: request))
+                reply(try Engine.shared.acquire(id: id, configuration: data, size: size, scale: scale, display: display,
+                                                preview: self.preview, mode: mode, activity: activity), nil)
             } catch { extensionLog("Acquire failed: \(error.localizedDescription)"); reply(nil, error) }
         }
     }
     func update(withId id: Any?, request: Any?, reply: @escaping (Error?) -> Void) {
         DispatchQueue.main.async {
             let isPreview = wallpaperUUID(id).flatMap { Engine.shared.surfaces[$0]?.preview } ?? self.preview
-            if !isPreview, let request {
-                Engine.shared.update(mode: caseName(findProperty("presentationMode", in: request)) ?? "default",
-                                     activity: caseName(findProperty("activityState", in: request)) ?? "active")
+            if !isPreview, let request, let surfaceID = wallpaperUUID(id) ?? self.lastID {
+                Engine.shared.update(id: surfaceID, mode: caseName(findProperty("presentationMode", in: request)),
+                                     activity: caseName(findProperty("activityState", in: request)))
             }
             reply(nil)
         }

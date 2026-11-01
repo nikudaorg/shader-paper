@@ -9,7 +9,7 @@ struct ShaderEntry: Identifiable {
 
 enum ShaderLibrary {
     static let provider = "com.avisualmeditation.wallpaper.shader-extension"
-    static let defaultShader = "GPT6-Astra-II"
+    static let defaultShader = "Patterns"
     static var entries: [ShaderEntry] {
         guard let resources = Bundle.main.resourceURL else { return [] }
         return entries(in: resources)

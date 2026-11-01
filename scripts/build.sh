@@ -31,7 +31,7 @@ xcrun swiftc "${common[@]}" -parse-as-library -application-extension -Xlinker -e
   "$repo"/Sources/Shared/*.swift "$repo"/Sources/Extension/*.swift \
   -o "$ext/Contents/MacOS/MeditationExtension" \
   -framework AppKit -framework Metal -framework AVFoundation -framework IOSurface -framework QuartzCore -framework ExtensionFoundation -framework Security
-xcrun swiftc "${common[@]}" -parse-as-library "$repo/Sources/Shared/ShaderLibrary.swift" \
+xcrun swiftc "${common[@]}" -parse-as-library "$repo/Sources/Shared/ShaderLibrary.swift" "$repo/Sources/Shared/WallpaperPresentation.swift" \
   "$repo"/Sources/App/*.swift -o "$app/Contents/MacOS/VisualMeditation" -framework SwiftUI -framework AppKit
 if [[ "${1:-}" != "--reuse-previews" ]]; then
   xcrun swiftc "${common[@]}" -parse-as-library "$repo"/Sources/Shared/*.swift \

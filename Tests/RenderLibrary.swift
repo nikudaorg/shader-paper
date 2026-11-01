@@ -15,7 +15,7 @@ import CoreVideo
                 // other model's shader source to the reviewing agent.
                 for (time, size) in [(18.0, CGSize(width: 640, height: 400)),
                                      (47.0, CGSize(width: 400, height: 640))] {
-                    let frame = try kernel.frame(time: time, size: size)
+                    let frame = try kernel.frame(time: time, size: size, presentation: entry.id == "Patterns" ? .locked : .desktop)
                     CVPixelBufferLockBaseAddress(frame, .readOnly)
                     defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
                     let bytes = CVPixelBufferGetBaseAddress(frame)!

@@ -28,7 +28,7 @@ enum WallpaperSelection {
     static func selected(in value: Any) -> String? {
         if let dict = value as? [String: Any] {
             if dict["Provider"] as? String == ShaderLibrary.provider, let data = dict["Configuration"] as? Data {
-                return String(data: data, encoding: .utf8)
+                return WallpaperConfiguration.decode(data).lockShader
             }
             return dict.values.compactMap { selected(in: $0) }.first
         }
@@ -38,11 +38,21 @@ enum WallpaperSelection {
         guard let data = try? Data(contentsOf: index), let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) else { return nil }
         return selected(in: plist)
     }
+    static let appearanceFile = support.appendingPathComponent("Appearance.json")
+    static func savedConfiguration() -> WallpaperConfiguration {
+        WallpaperConfiguration.decode(try? Data(contentsOf: appearanceFile))
+    }
+    static func linked(_ current: [String: Any], configuration: WallpaperConfiguration, date: Date = Date()) throws -> [String: Any] {
+        try linked(current, data: configuration.encoded(), date: date)
+    }
     static func linked(_ current: [String: Any], shader: String, date: Date = Date()) throws -> [String: Any] {
+        try linked(current, data: Data(shader.utf8), date: date)
+    }
+    private static func linked(_ current: [String: Any], data: Data, date: Date) throws -> [String: Any] {
         var result = current
         let options = try PropertyListSerialization.data(fromPropertyList: ["values": ["placement": ["picker": ["_0": ["id": "FillScreen"]]]]], format: .binary, options: 0)
         let container: [String: Any] = ["Type": "linked", "Linked": ["LastSet": date, "LastUse": date, "Content": [
-            "Choices": [["Provider": ShaderLibrary.provider, "Files": [], "Configuration": Data(shader.utf8)]],
+            "Choices": [["Provider": ShaderLibrary.provider, "Files": [], "Configuration": data]],
             "Shuffle": "$null", "EncodedOptionValues": options]]]
         result["AllSpacesAndDisplays"] = container; result["SystemDefault"] = container
         result["Displays"] = [String: Any](); result["Spaces"] = [String: Any]()
@@ -82,7 +92,14 @@ enum WallpaperSelection {
         committed = true
     }
     static func activate(_ shader: String) throws {
-        guard ShaderLibrary.entry(shader) != nil else { throw failure("Unknown shader: \(shader)") }
+        var configuration = WallpaperConfiguration.defaults
+        configuration.desktopShader = shader; configuration.lockShader = shader
+        try activate(configuration)
+    }
+    static func activate(_ configuration: WallpaperConfiguration) throws {
+        for shader in [configuration.desktopShader,configuration.lockShader] {
+            guard ShaderLibrary.entry(shader) != nil else { throw failure("Unknown shader: \(shader)") }
+        }
         try register()
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         try update { current, data in
@@ -92,8 +109,9 @@ enum WallpaperSelection {
             if !containsOurs(current) || !FileManager.default.fileExists(atPath: support.appendingPathComponent("Previous.plist").path) {
                 try data.write(to: support.appendingPathComponent("Previous.plist"), options: .atomic)
             }
-            return try linked(current, shader: shader)
+            return try linked(current, configuration: configuration)
         }
+        try configuration.encoded().write(to: appearanceFile, options: .atomic)
     }
     static func restore() throws {
         let previous = try PropertyListSerialization.propertyList(from: Data(contentsOf: support.appendingPathComponent("Previous.plist")), format: nil)

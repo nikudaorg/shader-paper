@@ -25,10 +25,17 @@ enum LocalDaylight {
 /// Time-aware artwork can also read a Float local hour at fragment buffer(1).
 /// The half-float artwork is converted into an IOSurface-backed display frame
 /// that remains valid in WallpaperAgent after the renderer's timer stops.
+private struct CompositeUniforms {
+    var clock: SIMD4<Float>, login: SIMD4<Float>, options: SIMD4<Float>, viewport: SIMD4<Float>
+    var mode: SIMD4<UInt32>
+}
+
 final class ShaderKernel {
     let device: MTLDevice
     let queue: MTLCommandQueue
     let usesLocalTime: Bool
+    let usesPresentationMode: Bool
+    private let pattern: PatternGPU?
     private(set) var lastGPUSeconds: TimeInterval = 0
     private let artPipeline: MTLRenderPipelineState
     private let displayPipeline: MTLRenderPipelineState
@@ -42,6 +49,7 @@ final class ShaderKernel {
             throw failure("Metal is unavailable")
         }
         self.device = device; self.queue = queue
+        pattern = source.deletingPathExtension().lastPathComponent == "Patterns" ? PatternGPU(device: device) : nil
         let library = try device.makeLibrary(source: String(contentsOf: source, encoding: .utf8), options: nil)
         func pipeline(_ lib: MTLLibrary, _ vertex: String, _ fragment: String, _ pixel: MTLPixelFormat,
                       reflection: inout MTLRenderPipelineReflection?) throws -> MTLRenderPipelineState {
@@ -54,6 +62,7 @@ final class ShaderKernel {
         var artReflection: MTLRenderPipelineReflection?
         artPipeline = try pipeline(library, "vertex_main", "fragment_main", .rgba16Float, reflection: &artReflection)
         usesLocalTime = artReflection?.fragmentBindings.contains { $0.type == .buffer && $0.index == 1 && $0.isUsed } ?? false
+        usesPresentationMode = artReflection?.fragmentBindings.contains { $0.type == .buffer && $0.index == 2 && $0.isUsed } ?? false
         let conversion = try device.makeLibrary(source: """
         #include <metal_stdlib>
         using namespace metal;
@@ -62,12 +71,35 @@ final class ShaderKernel {
             float2 uv = float2(float((id << 1u) & 2u), float(id & 2u));
             return {float4(uv * 2.0 - 1.0, 0, 1)};
         }
-        fragment float4 display_fragment(V in [[stage_in]], texture2d<float> art [[texture(0)]]) {
-            float3 c = max(art.read(uint2(in.position.xy)).rgb, 0.0);
-            // Preserve SDR values; compress only overbright highlights. The
-            // desktop surface is SDR, whereas DriftView also offers EDR output.
-            c /= max(1.0, max(c.r, max(c.g, c.b)));
-            return float4(c, 1);
+        struct CompositeUniforms { float4 clock; float4 login; float4 options; float4 viewport; uint4 mode; };
+        float regionMask(float2 point,float4 rect,float feather) {
+            float radius=min(rect.z,rect.w)*0.2;
+            float2 q=abs(point-rect.xy)-rect.zw*0.5+radius;
+            float distance=length(max(q,0.0))+min(max(q.x,q.y),0.0)-radius;
+            return 1.0-smoothstep(-feather*0.5,feather*0.5,distance);
+        }
+        fragment float4 display_fragment(V in [[stage_in]], texture2d<float> art [[texture(0)]],
+                                         constant CompositeUniforms& config [[buffer(0)]]) {
+            float2 dimensions=float2(art.get_width(),art.get_height());
+            float3 c=art.read(uint2(in.position.xy)).rgb;
+            // Only locked presentation receives these local blur regions.
+            if(config.mode.x==2u && config.mode.y!=0u && config.options.x>0.0) {
+                float2 point=in.position.xy/dimensions*float2(1440.0,932.0);
+                float mask=max(regionMask(point,config.clock,config.options.y),regionMask(point,config.login,config.options.y));
+                if(mask>0.0) {
+                    constexpr sampler sampleFilter(coord::normalized,address::clamp_to_edge,filter::linear);
+                    float2 uv=in.position.xy/dimensions;
+                    float2 d=config.options.x*dimensions.y/932.0/dimensions;
+                    float3 blurred=c*0.25;
+                    blurred+=(art.sample(sampleFilter,uv+float2(d.x,0)).rgb+art.sample(sampleFilter,uv-float2(d.x,0)).rgb
+                            +art.sample(sampleFilter,uv+float2(0,d.y)).rgb+art.sample(sampleFilter,uv-float2(0,d.y)).rgb)*0.125;
+                    blurred+=(art.sample(sampleFilter,uv+d).rgb+art.sample(sampleFilter,uv-d).rgb
+                            +art.sample(sampleFilter,uv+float2(d.x,-d.y)).rgb+art.sample(sampleFilter,uv+float2(-d.x,d.y)).rgb)*0.0625;
+                    c=mix(c,blurred,mask);
+                }
+            }
+            c=max(c,0.0); c/=max(1.0,max(c.r,max(c.g,c.b)));
+            return float4(c,1);
         }
         """, options: nil)
         var displayReflection: MTLRenderPipelineReflection?
@@ -77,7 +109,7 @@ final class ShaderKernel {
         }
     }
 
-    func frame(time: Double, size: CGSize, localHour: Float = 12) throws -> CVPixelBuffer {
+    func frame(time: Double, size: CGSize, localHour: Float = 12, presentation: WallpaperPresentation = .desktop, configuration: WallpaperConfiguration = .defaults) throws -> CVPixelBuffer {
         let w = max(2, Int(size.width)), h = max(2, Int(size.height))
         if dimensions != CGSize(width: w, height: h) {
             dimensions = CGSize(width: w, height: h)
@@ -112,12 +144,28 @@ final class ShaderKernel {
         encoder.setRenderPipelineState(artPipeline)
         encoder.setFragmentBytes(&t, length: 4, index: 0)
         encoder.setFragmentBytes(&hour, length: 4, index: 1)
+        var mode = presentation.rawValue
+        encoder.setFragmentBytes(&mode, length: 4, index: 2)
+        if let pattern {
+            var uniforms = try pattern.prepare(time: time, size: CGSize(width: w,height: h), settings: configuration.pattern)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<PatternUniforms>.stride, index: 3)
+            encoder.setFragmentBuffer(pattern.tiles, offset: 0, index: 4)
+            encoder.setFragmentTexture(pattern.map, index: 1)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
         pass.colorAttachments[0].texture = texture
         guard let finish = command.makeRenderCommandEncoder(descriptor: pass) else { throw failure("Could not finish frame") }
         finish.setRenderPipelineState(displayPipeline)
         finish.setFragmentTexture(art, index: 0)
+        let legibility = configuration.legibility
+        var composite = CompositeUniforms(
+            clock: SIMD4(legibility.clockX,legibility.clockY,legibility.clockWidth,legibility.clockHeight),
+            login: SIMD4(legibility.loginX,legibility.loginY,legibility.loginWidth,legibility.loginHeight),
+            options: SIMD4(min(24,max(0,legibility.radius)),min(120,max(1,legibility.feather)),0,0),
+            viewport: SIMD4(Float(w),Float(h),1440,932),
+            mode: SIMD4(presentation.rawValue,legibility.enabled ? 1 : 0,0,0))
+        finish.setFragmentBytes(&composite, length: MemoryLayout<CompositeUniforms>.stride, index: 0)
         finish.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         finish.endEncoding()
         command.commit(); command.waitUntilCompleted()
@@ -129,10 +177,15 @@ final class ShaderKernel {
 }
 
 final class ShaderRenderer {
-    let entry: ShaderEntry
-    let clock: MotionClock
+    private(set) var entry: ShaderEntry
+    private(set) var clock: MotionClock
     let layer = AVSampleBufferDisplayLayer()
-    private let kernel: ShaderKernel
+    private var kernels: [String: ShaderKernel] = [:]
+    private var activeKey: String
+    private var kernel: ShaderKernel { kernels[activeKey]! }
+    private(set) var presentation: WallpaperPresentation = .desktop
+    private var configuration = WallpaperConfiguration.defaults
+    private var needsAppearanceFrame = false
     private var timer: DispatchSourceTimer?
     private var daylightTimer: DispatchSourceTimer?
     private let daylightHour: () -> Float
@@ -151,7 +204,8 @@ final class ShaderRenderer {
         self.daylightHour = daylightHour
         // Each destination owns its pool; differently sized Spaces and picker
         // previews must not continually replace one another's render textures.
-        kernel = try ShaderKernel(source: entry.sourceURL)
+        activeKey = "desktop.\(entry.id)"
+        kernels = ["desktop.\(entry.id)": try ShaderKernel(source: entry.sourceURL)]
         resolution = RenderResolution(bounds: root.bounds.size, backingScale: scale)
         pixelSize = resolution.nativeSize
         layer.frame = root.bounds
@@ -162,12 +216,25 @@ final class ShaderRenderer {
         try draw()
     }
     func draw() throws {
-        _ = try presentFrame(size: nativePixelSize)
+        _ = try presentFrame(size: nativePixelSize); needsAppearanceFrame = false
+    }
+    func setAppearance(entry: ShaderEntry, clock: MotionClock, presentation: WallpaperPresentation,
+                       configuration: WallpaperConfiguration, redraw: Bool = true) throws {
+        let key = "\(presentation.role).\(entry.id)"
+        let changed = key != activeKey || self.presentation != presentation || self.configuration != configuration
+        if changed {
+            if kernels[key] == nil { kernels[key] = try ShaderKernel(source: entry.sourceURL) }
+            stop(); setDaylightUpdatesEnabled(false)
+            self.entry = entry; self.clock = clock; self.presentation = presentation
+            self.configuration = configuration; activeKey = key; needsAppearanceFrame = true
+        }
+        // A mode change redraws even when resolution and clock are unchanged.
+        if redraw && needsAppearanceFrame { try draw() }
     }
     @discardableResult
     private func presentFrame(size: CGSize) throws -> TimeInterval {
         let start = CACurrentMediaTime()
-        let pixel = try kernel.frame(time: clock.value, size: size, localHour: daylightHour())
+        let pixel = try kernel.frame(time: clock.value, size: size, localHour: daylightHour(), presentation: presentation, configuration: configuration)
         var format: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixel, formatDescriptionOut: &format) == noErr,
               let format else { throw failure("Could not describe display frame") }
@@ -200,7 +267,7 @@ final class ShaderRenderer {
         onFrame?()
     }
     func restoreNativeFrame() {
-        guard !isRendering && pixelSize != nativePixelSize else { return }
+        guard !isRendering && (pixelSize != nativePixelSize || needsAppearanceFrame) else { return }
         do { try draw() }
         catch { setDaylightUpdatesEnabled(false); onError?(error) }
     }
