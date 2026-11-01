@@ -3,7 +3,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 mkdir -p build/native build/module-cache
-xcrun swiftc -O -swift-version 5 -parse-as-library Sources/Shared/WallpaperPresentation.swift Tests/PresentationTests.swift -o build/native/test-presentation
+xcrun swiftc -O -swift-version 5 -parse-as-library Sources/Shared/WallpaperPresentation.swift Sources/Shared/WallpaperRequest.swift Tests/PresentationTests.swift -o build/native/test-presentation
 build/native/test-presentation
 xcrun swiftc -O -swift-version 5 -parse-as-library Sources/Shared/WallpaperPresentation.swift Sources/Shared/PatternSimulation.swift Tests/PatternTests.swift -o build/native/test-pattern
 build/native/test-pattern
@@ -23,3 +23,6 @@ build/native/test-lifecycle Resources
 xcrun swiftc "${common[@]}" Sources/Shared/*.swift Tests/DaylightTests.swift \
   -o build/native/test-daylight -framework AppKit -framework Metal -framework AVFoundation
 build/native/test-daylight Resources
+xcrun swiftc "${common[@]}" Sources/Shared/*.swift Tests/PresentationRenderTests.swift \
+  -o build/native/test-presentation-render -framework AppKit -framework Metal -framework AVFoundation
+build/native/test-presentation-render Resources

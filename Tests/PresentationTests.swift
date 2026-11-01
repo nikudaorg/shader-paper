@@ -1,6 +1,14 @@
 import Foundation
 @main struct PresentationTests {
     static func main() throws {
+        enum Mode { case active, locked, suspended(String) }
+        struct Box { let presentationMode: Mode? }
+        struct Request { let box: Box }
+        let request = Request(box: Box(presentationMode: .locked))
+        precondition(caseName(findProperty("presentationMode",in:request)) == "locked")
+        precondition(caseName(Mode.suspended("display asleep")) == "suspended")
+        precondition(caseName(Optional<Mode>.none as Any) == nil)
+        precondition(findProperty("activityState",in:request) == nil)
         var config = WallpaperConfiguration.defaults
         precondition(WallpaperPresentation(mode:"active") == .desktop)
         precondition(WallpaperPresentation(mode:"locked") == .locked)
@@ -10,7 +18,8 @@ import Foundation
         config.desktopShader = "Patterns"; config.desktopAnimated = true
         precondition(config.animates(in:.desktop))
         config.pattern.running = false; precondition(!config.animates(in:.locked))
-        precondition(WallpaperConfiguration.decode(try config.encoded()) == config)
+        let encoded = try config.encoded()
+        precondition(WallpaperConfiguration.decode(encoded) == config)
         let legacy = WallpaperConfiguration.decode(Data("Light".utf8))
         precondition(legacy.desktopShader == "Light" && legacy.lockShader == "Light")
         precondition(!legacy.legibility.enabled)

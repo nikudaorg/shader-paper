@@ -42,5 +42,7 @@ fragment half4 fragment_main(V in [[stage_in]], constant float& time [[buffer(0)
     float width=max(fwidth(edge),0.000001);
     float coverage=1.0-smoothstep(-width*0.5,width*0.5,edge);
     float hue=config.viewport.w/360.0;
-    return half4(half3(mix(palette(tile.motif.x,hue),palette(tile.motif.y,hue),coverage)),1);
+    float3 color=mix(palette(tile.motif.x,hue),palette(tile.motif.y,hue),coverage);
+    float3 linear=select(color/12.92,pow((color+0.055)/1.055,float3(2.4)),color>0.04045);
+    return half4(half3(linear),1);
 }

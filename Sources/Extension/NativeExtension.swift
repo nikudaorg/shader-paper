@@ -81,7 +81,7 @@ final class Engine {
         applyPolicy()
     }
     func applyPolicy() {
-        var movingClocks = Set<String>(), visibleClocks = Set<String>()
+        var movingClocks = Set<String>()
         for surface in surfaces.values where !surface.preview && surface.valid {
             let mode = surface.presentation, config = surface.configuration
             let entry = ShaderLibrary.entry(config.shader(for: mode)) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)!
@@ -89,7 +89,6 @@ final class Engine {
             let active = !sleeping && surface.activity == "active"
             do { try surface.renderer.setAppearance(entry: entry, clock: clock, presentation: mode, configuration: config, redraw: active) }
             catch { extensionLog("Appearance change failed: \(error.localizedDescription)"); surface.renderer.stop(); continue }
-            visibleClocks.insert(key)
             if active && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion && mode != .unknown && mode != .idle && config.animates(in: mode) {
                 movingClocks.insert(key)
             }
@@ -111,7 +110,7 @@ final class Engine {
         let presentation = preview ? WallpaperPresentation.preview : (mode.map(WallpaperPresentation.init(mode:)) ?? surfaces[id]?.presentation ?? .desktop)
         let entry = ShaderLibrary.entry(configuration.shader(for: presentation)) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)
         guard let entry else { throw failure("No bundled shaders") }
-        if var existing = surfaces[id], existing.configuration == configuration,
+        if var existing = surfaces[id], existing.configuration == configuration, existing.preview == preview,
            existing.root.bounds.size == size, existing.root.contentsScale == scale {
             existing.generation = UUID(); existing.valid = true; existing.presentation = presentation
             if let activity { existing.activity = activity }; surfaces[id] = existing
