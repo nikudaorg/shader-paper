@@ -11,3 +11,7 @@ Parts of the wallpaper extension's XPC bridge are adapted from [kageroumado/phos
 These third-party licenses apply to their respective components. No project-wide license has been added during extraction.
 
 Portal and Flight were added in September 2026. Portal renders the WorkOS symbol as a magnesium sculpture, with an outline adapted from the official mark on the [WorkOS website](https://workos.com/), viewed September 8, 2026. Its material, lighting, and rendering are original procedural artwork, developed from a generated material concept. It is not an official WorkOS wallpaper. Flight is original procedural artwork. Both shaders are self-contained and require no external image assets or textures.
+
+## Patterns fork additions
+
+The Patterns flow simulation and original motif renderer were ported from the patterns project developed for this workspace. Calm Sky is original, time-independent Metal artwork. The presentation-state and native renderer changes preserve Shader Paper’s existing architecture and provider identity. Phosphene’s named-property XPC reflection remains the reference for interpreting the private request; its original MIT notice is retained.

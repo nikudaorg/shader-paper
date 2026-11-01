@@ -1,3 +1,13 @@
+# Shader Paper · Patterns fork
+
+This fork provides a calm static desktop and a live procedural pattern on the real lock screen. It routes each wallpaper surface using macOS’s explicit presentation mode, exposes that mode to Metal at fragment buffer 2, and adds adjustable clock/login blur zones for a 1440×932 MacBook Air layout.
+
+Desktop and lock-screen shaders, animation and all pattern controls live in the app. No WallpaperMachine, Steam assets or video export is needed. See [setup, controls, architecture and validation](docs/patterns.md).
+
+Build with `bash scripts/build.sh`, test with `bash scripts/test.sh`, and package with `bash scripts/package.sh --skip-build` after a successful build. GitHub Actions builds and tests on an Apple silicon macOS runner without selecting any wallpaper.
+
+---
+
 # Shader Paper
 
 Living wallpapers, drawn in Metal.

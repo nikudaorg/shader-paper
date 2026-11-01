@@ -19,3 +19,7 @@ Selection registers the embedded extension and updates the user's private wallpa
 The private XPC bridge is derived from Phosphene; see the root license notice. The extension uses Xcode's `_NSExtensionMain` entry point so its XPC run loop remains alive after registration. Its app and provider identifiers intentionally retain their Visual Meditation values to preserve existing selections and saved clocks.
 
 The implementation targets Apple Silicon and macOS 26+. Validation uses the installed runtime Metal compiler.
+
+## Patterns fork
+
+The per-surface presentation contract, buffer-2 uniform, paired choice configuration, retained role-specific renderers, CPU flow field, mixed 2/3-way tile map and local legibility compositor are documented in [patterns.md](patterns.md). Appearance routing is independent of the motion clock. `Sources/Shared/WallpaperPresentation.swift` defines the stable shader enum and configuration, and `WallpaperRequest.swift` unwraps explicit XPC fields without string-scanning an entire request.
