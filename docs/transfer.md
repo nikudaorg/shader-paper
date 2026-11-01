@@ -13,7 +13,7 @@ If macOS offers **Open Anyway** in **System Settings → Privacy & Security**, u
 1. Transfer the `.zip` and adjacent `.zip.sha256` file together. In Terminal, from their folder, check the download with `shasum -a 256 -c ./*.zip.sha256`. It should report `OK`.
 2. Unzip the archive with Finder. Quit any existing Shader Paper gallery. Copy **Shader Paper.app** into your **Applications** folder inside your home folder (`~/Applications`), creating the folder if needed.
 3. Keep a single installed copy. If Shader Paper or Visual Meditation was previously installed, follow the [migration notes](migration.md) before replacing or registering the app. Both names share the same wallpaper provider identity; duplicate registered copies can conflict.
-4. Open the installed app, choose **Portal** for the magnesium WorkOS wallpaper, then click **Use as Wallpaper**. You can close the gallery afterward. The collection also appears in **System Settings → Wallpaper**.
+4. Disable WallpaperMachine’s lock-screen feature and quit it before applying this provider. Open the installed app, choose **Calm Sky** for Desktop and **Patterns** for Lock screen, and click **Apply appearances**. You can close the window afterward. See [Patterns setup and controls](patterns.md) for calibration and behavior.
 
 Selecting a wallpaper applies it across Spaces and displays and links it with the screen saver. **Restore Previous Wallpaper** in the app restores the selection saved before activation. Merely unpacking the archive does not change your wallpaper.
 

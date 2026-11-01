@@ -34,6 +34,7 @@ final class Engine {
     }
     var surfaces: [UUID: Surface] = [:]
     private var clocks: [String: MotionClock] = [:]
+    private var pendingUpdates: [UUID: (mode: String?, activity: String?)] = [:]
     private var sleeping = false
     private var lastCheckpoint = CACurrentMediaTime()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
@@ -73,7 +74,13 @@ final class Engine {
         }
     }
     func update(id: UUID, mode: String?, activity: String?) {
-        guard var surface = surfaces[id], !surface.preview else { return }
+        guard var surface = surfaces[id] else {
+            let previous = pendingUpdates[id]
+            pendingUpdates[id] = (mode ?? previous?.mode, activity ?? previous?.activity)
+            if pendingUpdates.count > 64, let stale = pendingUpdates.keys.first(where: { $0 != id }) { pendingUpdates.removeValue(forKey: stale) }
+            return
+        }
+        guard !surface.preview else { return }
         if let mode { surface.presentation = WallpaperPresentation(mode: mode) }
         if let activity { surface.activity = activity }
         surfaces[id] = surface
@@ -107,13 +114,16 @@ final class Engine {
     }
     func acquire(id: UUID, configuration data: Data?, size: CGSize, scale: CGFloat, display: UInt32?, preview: Bool, mode: String? = nil, activity: String? = nil) throws -> AnyObject {
         let configuration = WallpaperConfiguration.decode(data)
-        let presentation = preview ? WallpaperPresentation.preview : (mode.map(WallpaperPresentation.init(mode:)) ?? surfaces[id]?.presentation ?? .desktop)
+        let pending = pendingUpdates.removeValue(forKey: id)
+        let reportedMode = mode ?? pending?.mode
+        let effectiveActivity = activity ?? pending?.activity ?? surfaces[id]?.activity ?? "active"
+        let presentation = preview ? WallpaperPresentation.preview : (reportedMode.map(WallpaperPresentation.init(mode:)) ?? surfaces[id]?.presentation ?? .desktop)
         let entry = ShaderLibrary.entry(configuration.shader(for: presentation)) ?? ShaderLibrary.entry(ShaderLibrary.defaultShader)
         guard let entry else { throw failure("No bundled shaders") }
         if var existing = surfaces[id], existing.configuration == configuration, existing.preview == preview,
            existing.root.bounds.size == size, existing.root.contentsScale == scale {
             existing.generation = UUID(); existing.valid = true; existing.presentation = presentation
-            if let activity { existing.activity = activity }; surfaces[id] = existing
+            existing.activity = effectiveActivity; surfaces[id] = existing
             if !preview { applyPolicy() }
             guard let result = createRemoteContextXPC(contextId: existing.context.contextId) else { throw failure("Could not return wallpaper surface") }
             return result
@@ -147,7 +157,7 @@ final class Engine {
             self.checkpoint()
         }
         renderer.onError = { error in extensionLog("Rendering \(entry.id) failed: \(error.localizedDescription)") }
-        surfaces[id] = Surface(context: context, root: root, renderer: renderer, preview: preview, generation: UUID(), valid: true, configuration: configuration, presentation: presentation, activity: activity ?? "active")
+        surfaces[id] = Surface(context: context, root: root, renderer: renderer, preview: preview, generation: UUID(), valid: true, configuration: configuration, presentation: presentation, activity: effectiveActivity)
         if preview { clock.setMoving(false, immediately: true) }
         else { applyPolicy() }
         guard let result = createRemoteContextXPC(contextId: context.contextId) else { throw failure("Could not return wallpaper surface") }
@@ -155,6 +165,7 @@ final class Engine {
         return result
     }
     func invalidate(_ id: UUID) {
+        pendingUpdates.removeValue(forKey: id)
         guard let surface = surfaces[id] else { return }
         surfaces[id]?.valid = false
         surface.renderer.stop()
